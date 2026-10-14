@@ -59,25 +59,43 @@ export function TeacherHome() {
   const [tab, setTab] = React.useState<Tab>("materials");
   const [app, setApp] = React.useState<TeacherApplication | null>(null);
   const [loadingApp, setLoadingApp] = React.useState(true);
+  // Once the admin has approved this teacher, remember it on this device so a later login (or a slow /
+  // failed status request) never shows "Approval Pending" again. The server status always wins when it answers.
+  const [rememberedApproved, setRememberedApproved] = React.useState(false);
   const user = getStoredUser();
   const { personalizedGreeting } = useTimeGreeting(user?.name);
+  const approvedKey = user?.id ?? user?.email ? `lucous_teacher_approved:${user?.id ?? user?.email}` : "";
+
+  function applyApplication(next: TeacherApplication) {
+    setApp(next);
+    const approved = next.status === "APPROVED";
+    setRememberedApproved(approved);
+    if (approvedKey && typeof window !== "undefined") {
+      if (approved) window.localStorage.setItem(approvedKey, "1");
+      else window.localStorage.removeItem(approvedKey);
+    }
+  }
 
   React.useEffect(() => {
     let active = true;
+    const remembered =
+      !!approvedKey && typeof window !== "undefined" && window.localStorage.getItem(approvedKey) === "1";
+    if (remembered) setRememberedApproved(true);
     (async () => {
       try {
         const res = await fetchTeacherApplication();
         if (active && res.application) {
-          setApp(res.application);
+          applyApplication(res.application);
           if (res.application.status !== "APPROVED") {
             setTab("application");
           }
         }
       } catch {
-        // Fallback: if user session has stored application
-        if (active && user?.teacherApplication) {
-          setApp(user.teacherApplication);
-          if (user.teacherApplication.status !== "APPROVED") {
+        // Fallback: use the freshest stored session data, unless we already know the teacher is approved
+        const stored = getStoredUser();
+        if (active && !remembered && stored?.teacherApplication) {
+          applyApplication(stored.teacherApplication);
+          if (stored.teacherApplication.status !== "APPROVED") {
             setTab("application");
           }
         }
@@ -90,9 +108,9 @@ export function TeacherHome() {
     };
   }, []);
 
-  const isApproved = app?.status === "APPROVED";
-  const isPending = app?.status === "PENDING";
-  const isRejected = app?.status === "REJECTED";
+  const isApproved = rememberedApproved || app?.status === "APPROVED";
+  const isPending = !isApproved && app?.status === "PENDING";
+  const isRejected = !isApproved && app?.status === "REJECTED";
 
   return (
     <RequireRole role="teacher" title="Teacher">
@@ -173,11 +191,14 @@ export function TeacherHome() {
         </div>
 
         {tab === "application" ? (
-          <TeacherApplicationPanel onApplicationUpdated={(updated) => setApp(updated)} />
+          <TeacherApplicationPanel onApplicationUpdated={(updated) => applyApplication(updated)} />
         ) : null}
 
         {/* If teacher is not approved and attempts to access protected teaching panels, show friendly locked screen */}
         {!isApproved && tab !== "application" && tab !== "profile" ? (
+          loadingApp ? (
+            <p className="text-sm text-muted-foreground">Checking your approval status…</p>
+          ) : (
           <Card className="border-dashed">
             <CardContent className="p-8 text-center">
               <div className="mx-auto max-w-md space-y-3">
@@ -196,6 +217,7 @@ export function TeacherHome() {
               </div>
             </CardContent>
           </Card>
+          )
         ) : (
           <>
             {tab === "courses" ? <CoursesPanel /> : null}
