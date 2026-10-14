@@ -1,0 +1,417 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("MONGODB_URI")
+}
+
+// ----------------------------- Auth ----------------------------------------
+// MongoDB connector has no native enums, so role/status/mode/difficulty are
+// stored as strings and validated in the application layer (server.js).
+
+model User {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  name       String
+  email      String   @unique
+  password   String
+  role       String   @default("STUDENT") // STUDENT | PARENT | TEACHER | ADMIN
+  isVerified Boolean  @default(false)
+  // Optional profile fields captured at signup / editable on the profile page.
+  phone      String?
+  grade      String?
+  board      String?
+  school     String?
+  subject    String?
+  avatarUrl  String?
+  xp         Int      @default(0) // accumulated game XP (leaderboard)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  attempts        Attempt[]
+  progress        StudentProgress[]
+  materials       UploadedMaterial[]
+  lessonDrafts    LessonDraft[]
+  assessments     AssessmentDraft[]
+  authoredContent LearningContent[] @relation("ContentAuthor")
+  courses         Course[]
+  enrollments     Enrollment[]
+  otps            Otp[]
+  classAccessCodes ClassAccessCode[]
+  gameScores      GameScore[]
+  payments        Payment[]
+  aiMessages      AiMessage[]
+  children        ParentChild[]     @relation("ParentChildren")
+  parentLinks     ParentChild[]     @relation("StudentParent")
+}
+
+model Otp {
+  id        String    @id @default(auto()) @map("_id") @db.ObjectId
+  email     String
+  code      String
+  purpose   String    @default("VERIFY") // VERIFY | RESET
+  expiresAt DateTime
+  verified  Boolean   @default(false)
+  createdAt DateTime  @default(now())
+  userId    String?   @db.ObjectId
+  user      User?     @relation(fields: [userId], references: [id])
+
+  @@index([email])
+}
+
+// ------------------- Scalable education structure (data) --------------------
+// Board -> Grade (Class) -> Subject -> Chapter -> Topic -> Content/Question.
+
+model Board {
+  id       String    @id @default(auto()) @map("_id") @db.ObjectId
+  name     String    @unique
+  subjects Subject[]
+}
+
+model Grade {
+  id       String    @id @default(auto()) @map("_id") @db.ObjectId
+  name     String    @unique
+  subjects Subject[]
+}
+
+model Subject {
+  id        String             @id @default(auto()) @map("_id") @db.ObjectId
+  name      String
+  boardId   String             @db.ObjectId
+  gradeId   String             @db.ObjectId
+  board     Board              @relation(fields: [boardId], references: [id])
+  grade     Grade              @relation(fields: [gradeId], references: [id])
+  chapters  Chapter[]
+  materials UploadedMaterial[]
+
+  @@unique([boardId, gradeId, name])
+}
+
+model Chapter {
+  id        String             @id @default(auto()) @map("_id") @db.ObjectId
+  subjectId String             @db.ObjectId
+  subject   Subject            @relation(fields: [subjectId], references: [id])
+  name      String
+  topics    Topic[]
+  materials UploadedMaterial[]
+
+  @@unique([subjectId, name])
+}
+
+model Topic {
+  id        String            @id @default(auto()) @map("_id") @db.ObjectId
+  chapterId String            @db.ObjectId
+  chapter   Chapter           @relation(fields: [chapterId], references: [id])
+  name      String
+  contents  LearningContent[]
+  questions Question[]
+  attempts  Attempt[]
+  materials UploadedMaterial[]
+  gameScores GameScore[]
+
+  @@unique([chapterId, name])
+}
+
+// ------------------------- Content + AI pipeline fields ---------------------
+
+model LearningContent {
+  id         String            @id @default(auto()) @map("_id") @db.ObjectId
+  topicId    String            @db.ObjectId
+  topic      Topic             @relation(fields: [topicId], references: [id])
+  title      String
+  body       String
+  order      Int               @default(0)
+  source     String            @default("TEACHER") // TEACHER | UPLOADED | AI
+  status     String            @default("PUBLISHED") // DRAFT | PENDING_REVIEW | PUBLISHED
+  authorId   String?           @db.ObjectId
+  author     User?             @relation("ContentAuthor", fields: [authorId], references: [id])
+  materialId String?           @db.ObjectId
+  material   UploadedMaterial? @relation(fields: [materialId], references: [id])
+  progress   StudentProgress[]
+}
+
+model Question {
+  id          String            @id @default(auto()) @map("_id") @db.ObjectId
+  topicId     String            @db.ObjectId
+  topic       Topic             @relation(fields: [topicId], references: [id])
+  text        String
+  optionA     String
+  optionB     String
+  optionC     String
+  optionD     String
+  correct     Int
+  explanation String?
+  difficulty  String            @default("MEDIUM") // EASY | MEDIUM | HARD
+  source      String            @default("TEACHER")
+  status      String            @default("PUBLISHED")
+  materialId  String?           @db.ObjectId
+  material    UploadedMaterial? @relation(fields: [materialId], references: [id])
+}
+
+// -------------------- Teacher upload / AI pipeline foundation ---------------
+
+model UploadedMaterial {
+  id             String            @id @default(auto()) @map("_id") @db.ObjectId
+  teacherId      String            @db.ObjectId
+  teacher        User              @relation(fields: [teacherId], references: [id])
+  originalName   String
+  fileType       String
+  fileSize       Int
+  storageKey     String?           // Safe UUID storage identifier
+  storageUri     String?           // Storage locator (e.g. uploads/uuid.pdf or s3://...)
+  checksum       String?           // SHA-256 hash of file content for integrity
+  educationLevel String?           // primary | middle | secondary | higher_secondary | diploma
+  classGrade     String?           // 1 to 12
+  board          String?           // cbse | icse | maharashtra | telangana | andhra_pradesh | other
+  stream         String?           // science | commerce | arts (for higher_secondary)
+  branch         String?           // computer | it | mechanical | civil | electrical | electronics | other
+  scheme         String?           // msbte_k | msbte_i | sbtet | aicte | state_polytechnic
+  semester       Int?              // 1 to 8 (for diploma)
+  subjectName    String?
+  chapterName    String?
+  topicName      String?
+  language       String?           @default("en") // en | hi | mr | te
+  description    String?
+  boardId        String?           @db.ObjectId
+  gradeId        String?           @db.ObjectId
+  subjectId      String?           @db.ObjectId
+  chapterId      String?           @db.ObjectId
+  topicId        String?           @db.ObjectId
+  subject        Subject?          @relation(fields: [subjectId], references: [id])
+  chapter        Chapter?          @relation(fields: [chapterId], references: [id])
+  topic          Topic?            @relation(fields: [topicId], references: [id])
+  status         String            @default("UPLOADED") // UPLOADED | PROCESSING | ANALYZED | READY | FAILED
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  contents       LearningContent[]
+  questions      Question[]
+  lessonDrafts   LessonDraft[]
+  assessments    AssessmentDraft[]
+
+  @@index([teacherId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// ------------------------ Lesson Draft Generation ----------------------------
+
+model LessonDraft {
+  id               String            @id @default(auto()) @map("_id") @db.ObjectId
+  teacherId        String            @db.ObjectId
+  teacher          User              @relation(fields: [teacherId], references: [id])
+  sourceMaterialId String            @db.ObjectId
+  sourceMaterial   UploadedMaterial  @relation(fields: [sourceMaterialId], references: [id])
+  title            String
+  educationLevel   String?           // school | diploma
+  gradeOrSemester  String?
+  boardOrScheme    String?
+  subject          String
+  chapter          String?
+  topic            String?
+  content          String            // JSON-serialized structured LessonDraftContent
+  status           String            @default("DRAFT") // DRAFT | REVIEWED | PUBLISHED
+  accessCode       String?           @unique
+  publishedAt      DateTime?
+  aiProvider       String?           // gemini | openai | unconfigured_preview
+  aiModel          String?
+  sourceWordCount  Int?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  @@index([teacherId])
+  @@index([sourceMaterialId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// ------------------- AI Assessment & Game Generation (Phase 3.3) -------------
+
+model AssessmentDraft {
+  id               String            @id @default(auto()) @map("_id") @db.ObjectId
+  teacherId        String            @db.ObjectId
+  teacher          User              @relation(fields: [teacherId], references: [id])
+  sourceMaterialId String            @db.ObjectId
+  sourceMaterial   UploadedMaterial  @relation(fields: [sourceMaterialId], references: [id])
+  title            String
+  description      String?
+  contentType      String            @default("PRACTICE") // PRACTICE | TEST | GAME
+  gameFormat       String?           // MULTIPLE_CHOICE | TRUE_FALSE | FILL_BLANK | MATCHING | MIXED
+  difficulty       String            @default("MEDIUM") // EASY | MEDIUM | HARD
+  questionCount    Int               @default(5)
+  educationLevel   String?           // school | diploma
+  gradeOrSemester  String?
+  boardOrScheme    String?
+  subject          String
+  chapter          String?
+  topic            String?
+  content          String            // JSON-serialized AssessmentContent
+  status           String            @default("DRAFT") // DRAFT | REVIEWED | PUBLISHED
+  accessCode       String?           @unique
+  publishedAt      DateTime?
+  aiProvider       String?           // gemini | openai | unconfigured_preview
+  aiModel          String?
+  sourceWordCount  Int?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  @@index([teacherId])
+  @@index([sourceMaterialId])
+  @@index([contentType])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// --------------------------- Attempts + progress ----------------------------
+
+model Attempt {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String   @db.ObjectId
+  user      User     @relation(fields: [userId], references: [id])
+  topicId   String   @db.ObjectId
+  topic     Topic    @relation(fields: [topicId], references: [id])
+  mode      String // PLAY | PRACTICE | TEST | RETEST
+  correct   Int
+  total     Int
+  score     Float
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model StudentProgress {
+  id          String          @id @default(auto()) @map("_id") @db.ObjectId
+  userId      String          @db.ObjectId
+  user        User            @relation(fields: [userId], references: [id])
+  contentId   String          @db.ObjectId
+  content     LearningContent @relation(fields: [contentId], references: [id])
+  completedAt DateTime        @default(now())
+
+  @@unique([userId, contentId])
+}
+
+// ------------------------------ Courses -------------------------------------
+
+model Course {
+  id          String       @id @default(auto()) @map("_id") @db.ObjectId
+  title       String
+  description String
+  subject     String
+  board       String
+  price       Int          @default(0) // in paise; 0 = free course
+  currency    String       @default("INR")
+  teacherId   String       @db.ObjectId
+  teacher     User         @relation(fields: [teacherId], references: [id])
+  createdAt   DateTime     @default(now())
+  enrollments Enrollment[]
+  payments    Payment[]
+
+  @@index([teacherId])
+}
+
+// ---------------------------- Enrollment ------------------------------------
+
+model Enrollment {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  courseId   String   @db.ObjectId
+  course    Course   @relation(fields: [courseId], references: [id])
+  studentId String   @db.ObjectId
+  student   User     @relation(fields: [studentId], references: [id])
+  teacherId String?  @db.ObjectId
+  status    String   @default("ENROLLED")
+  createdAt DateTime @default(now())
+
+  @@unique([courseId, studentId])
+  @@index([studentId])
+  @@index([teacherId])
+}
+
+// ------------------------------ Payments ------------------------------------
+// Razorpay orders/payments. amount is stored in paise. The secret never leaves
+// the backend; only the public key id is exposed via /api/payments/config.
+
+model Payment {
+  id                String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId            String   @db.ObjectId
+  user              User     @relation(fields: [userId], references: [id])
+  courseId          String?  @db.ObjectId
+  course            Course?  @relation(fields: [courseId], references: [id])
+  amount            Int // paise
+  currency          String   @default("INR")
+  status            String   @default("CREATED") // CREATED | PAID | FAILED
+  razorpayOrderId   String   @unique
+  razorpayPaymentId String?
+  razorpaySignature String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// ------------------------------- Games --------------------------------------
+// A game session is scored server-side; XP is awarded and stored for the
+// leaderboard. gameId is presentational (which game mode was played).
+
+model GameScore {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String   @db.ObjectId
+  user      User     @relation(fields: [userId], references: [id])
+  gameId    String
+  topicId   String?  @db.ObjectId
+  topic     Topic?   @relation(fields: [topicId], references: [id])
+  correct   Int
+  total     Int
+  score     Float
+  xp        Int
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([gameId])
+}
+
+// ------------------------------ AI Tutor ------------------------------------
+// Conversation log for the AI tutor. content is the message text; role is
+// "user" | "assistant" | "system".
+
+model AiMessage {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId         String   @db.ObjectId
+  user           User     @relation(fields: [userId], references: [id])
+  conversationId String
+  role           String // user | assistant | system
+  content        String
+  createdAt      DateTime @default(now())
+
+  @@index([userId])
+  @@index([conversationId])
+}
+
+// --------------------------- Parent <-> Child -------------------------------
+// A parent may only view data for students linked here.
+
+model ParentChild {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  parentId  String   @db.ObjectId
+  parent    User     @relation("ParentChildren", fields: [parentId], references: [id])
+  studentId String   @db.ObjectId
+  student   User     @relation("StudentParent", fields: [studentId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@unique([parentId, studentId])
+  @@index([studentId])
+}
+
+// One secure, time-limited code a teacher shares so students can open ALL of the
+// teacher's currently published lessons and assessments until it expires.
+model ClassAccessCode {
+  id        String    @id @default(auto()) @map("_id") @db.ObjectId
+  code      String    @unique
+  teacherId String    @db.ObjectId
+  teacher   User      @relation(fields: [teacherId], references: [id])
+  title     String?
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([teacherId])
+}
