@@ -18,6 +18,9 @@ model User {
   password   String
   role       String   @default("STUDENT") // STUDENT | PARENT | TEACHER | ADMIN
   isVerified Boolean  @default(false)
+  // Teacher admin-approval state (persisted so approval survives restarts / re-login).
+  teacherStatus          String? // PENDING | APPROVED | REJECTED
+  teacherRejectionReason String?
   // Optional profile fields captured at signup / editable on the profile page.
   phone      String?
   grade      String?
@@ -211,7 +214,7 @@ model LessonDraft {
   topic            String?
   content          String            // JSON-serialized structured LessonDraftContent
   status           String            @default("DRAFT") // DRAFT | REVIEWED | PUBLISHED
-  accessCode       String?           @unique
+  accessCode       String?
   publishedAt      DateTime?
   aiProvider       String?           // gemini | openai | unconfigured_preview
   aiModel          String?
@@ -247,7 +250,7 @@ model AssessmentDraft {
   topic            String?
   content          String            // JSON-serialized AssessmentContent
   status           String            @default("DRAFT") // DRAFT | REVIEWED | PUBLISHED
-  accessCode       String?           @unique
+  accessCode       String?
   publishedAt      DateTime?
   aiProvider       String?           // gemini | openai | unconfigured_preview
   aiModel          String?

@@ -157,6 +157,12 @@ function createPendingTeacherApplication(user) {
   const existing = teacherApplications.get(user.id);
   if (existing) return existing;
 
+  // Restore the decision saved on the user record (survives server restarts),
+  // so an already-approved teacher is never sent back to PENDING on re-login.
+  const savedStatus = Object.values(APPLICATION_STATUS).includes(user.teacherStatus)
+    ? user.teacherStatus
+    : APPLICATION_STATUS.PENDING;
+
   const app = {
     id: `app-${user.id}`,
     userId: user.id,
@@ -168,8 +174,9 @@ function createPendingTeacherApplication(user) {
     qualifications: "",
     experience: "",
     documents: [],
-    status: APPLICATION_STATUS.PENDING,
-    rejectionReason: null,
+    status: savedStatus,
+    rejectionReason:
+      savedStatus === APPLICATION_STATUS.REJECTED ? user.teacherRejectionReason || null : null,
     reviewedBy: null,
     reviewedByName: null,
     reviewedAt: null,
@@ -178,6 +185,28 @@ function createPendingTeacherApplication(user) {
   };
 
   teacherApplications.set(user.id, app);
+  return app;
+}
+
+/**
+ * The database user record is the source of truth for the admin's decision.
+ * Align an already-loaded application with it, so a one-time approval is honoured
+ * everywhere (after restarts, on every login, and across server instances).
+ * Returns the application (or null if the user has none yet).
+ */
+function syncApplicationFromUser(user) {
+  if (!user || !user.id) return null;
+  const app = teacherApplications.get(user.id);
+  if (!app) return null;
+
+  const saved = user.teacherStatus;
+  if (Object.values(APPLICATION_STATUS).includes(saved) && saved !== app.status) {
+    app.status = saved;
+    app.rejectionReason =
+      saved === APPLICATION_STATUS.REJECTED ? user.teacherRejectionReason || null : null;
+    app.updatedAt = new Date().toISOString();
+    teacherApplications.set(user.id, app);
+  }
   return app;
 }
 
@@ -228,9 +257,12 @@ function saveTeacherApplication(userId, data, userProfile) {
     app.documents = data.documents;
   }
 
-  // Reset status to PENDING upon submission/resubmission
-  app.status = APPLICATION_STATUS.PENDING;
-  app.rejectionReason = null;
+  // Approval is one-time: an APPROVED teacher stays approved when editing their
+  // details. Only new or REJECTED applications go (back) to PENDING.
+  if (app.status !== APPLICATION_STATUS.APPROVED) {
+    app.status = APPLICATION_STATUS.PENDING;
+    app.rejectionReason = null;
+  }
   app.submittedAt = new Date().toISOString();
   app.updatedAt = new Date().toISOString();
 
@@ -322,6 +354,7 @@ module.exports = {
   isTeacherApproved,
   getApplicationByUserId,
   createPendingTeacherApplication,
+  syncApplicationFromUser,
   saveTeacherApplication,
   addDocumentToApplication,
   reviewTeacherApplication,

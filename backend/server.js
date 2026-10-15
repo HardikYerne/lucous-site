@@ -28,6 +28,7 @@ const {
   isTeacherApproved,
   getApplicationByUserId,
   createPendingTeacherApplication,
+  syncApplicationFromUser,
   saveTeacherApplication,
   addDocumentToApplication,
   reviewTeacherApplication,
@@ -606,7 +607,7 @@ app.post("/api/auth/login", async (req, res) => {
       { expiresIn: "7d" }
     );
 
-    const teacherApp = user.role === "TEACHER" ? (getApplicationByUserId(user.id) || createPendingTeacherApplication(user)) : null;
+    const teacherApp = user.role === "TEACHER" ? (syncApplicationFromUser(user) || getApplicationByUserId(user.id) || createPendingTeacherApplication(user)) : null;
 
     res.json({
       success: true,
@@ -668,7 +669,7 @@ app.get("/api/auth/me", authenticate, async (req, res) => {
       return res.status(404).json({ success: false, message: "User not found" });
     }
 
-    const teacherApp = user.role === "TEACHER" ? (getApplicationByUserId(user.id) || createPendingTeacherApplication(user)) : null;
+    const teacherApp = user.role === "TEACHER" ? (syncApplicationFromUser(user) || getApplicationByUserId(user.id) || createPendingTeacherApplication(user)) : null;
 
     res.json({
       success: true,
@@ -1049,11 +1050,43 @@ function requireStudent(req, res, next) {
   return verifyRole(req, res, next, "STUDENT");
 }
 
+// After a server restart the in-memory application store is empty. Rebuild it
+// from the persisted user record so a one-time approval is never lost.
+async function ensureTeacherApplication(userId) {
+  let user = null;
+  if (process.env.MONGODB_URI) {
+    try {
+      user = await prisma.user.findUnique({ where: { id: userId } });
+    } catch {}
+  }
+  if (!user) user = inMemoryUsers.get(userId);
+  if (!user || user.role !== "TEACHER") return;
+
+  // Always honour the decision saved in the database (approval is one-time).
+  if (getApplicationByUserId(userId)) syncApplicationFromUser(user);
+  else createPendingTeacherApplication(user);
+}
+
+// The admin must see every teacher, even right after a restart (memory is empty then).
+async function ensureAllTeacherApplications() {
+  if (!process.env.MONGODB_URI) return;
+  try {
+    const teachers = await prisma.user.findMany({ where: { role: "TEACHER" } });
+    for (const teacher of teachers) {
+      if (getApplicationByUserId(teacher.id)) syncApplicationFromUser(teacher);
+      else createPendingTeacherApplication(teacher);
+    }
+  } catch (err) {
+    console.warn("Could not load teacher applications from the database:", err.message);
+  }
+}
+
 function requireTeacher(req, res, next) {
   return verifyRole(
     req,
     res,
-    () => {
+    async () => {
+      await ensureTeacherApplication(req.userId);
       const approved = isTeacherApproved(req.userId, inMemoryUsers.get(req.userId));
       if (!approved) {
         const app = getApplicationByUserId(req.userId);
@@ -1103,11 +1136,12 @@ function authenticate(req, res, next) {
 // Role gate built on authenticate.
 function requireRole(...roles) {
   return (req, res, next) =>
-    authenticate(req, res, () => {
+    authenticate(req, res, async () => {
       if (!roles.includes(req.role)) {
         return res.status(403).json({ success: false, message: "Forbidden" });
       }
       if (req.role === "TEACHER" && !roles.includes("ADMIN")) {
+        await ensureTeacherApplication(req.userId);
         const approved = isTeacherApproved(req.userId, inMemoryUsers.get(req.userId));
         if (!approved) {
           const app = getApplicationByUserId(req.userId);
@@ -1999,15 +2033,18 @@ app.get("/api/teacher/application", authenticate, async (req, res) => {
     return res.status(403).json({ success: false, message: "Teacher access only" });
   }
 
+  let user = null;
+  if (process.env.MONGODB_URI) {
+    try {
+      user = await prisma.user.findUnique({ where: { id: req.userId } });
+    } catch {}
+  }
+  if (!user) user = inMemoryUsers.get(req.userId);
+
   let application = getApplicationByUserId(req.userId);
-  if (!application) {
-    let user = null;
-    if (process.env.MONGODB_URI) {
-      try {
-        user = await prisma.user.findUnique({ where: { id: req.userId } });
-      } catch {}
-    }
-    if (!user) user = inMemoryUsers.get(req.userId);
+  if (application) {
+    application = syncApplicationFromUser(user) || application;
+  } else {
     application = createPendingTeacherApplication(user || { id: req.userId });
   }
 
@@ -2051,7 +2088,10 @@ app.post("/api/teacher/application", authenticate, async (req, res) => {
     name: String(name).trim(),
     school: institution ? String(institution).trim() : null,
     subject: subjects ? String(subjects).trim() : null,
-    isVerified: false,
+    // Only a not-yet-approved teacher is (re)set to pending; approval is one-time.
+    ...(updatedApp.status !== "APPROVED"
+      ? { isVerified: false, teacherStatus: "PENDING", teacherRejectionReason: null }
+      : {}),
   };
   if (avatarUrl) updateData.avatarUrl = avatarUrl;
 
@@ -2590,6 +2630,7 @@ app.get("/api/admin/teacher-applications", requireRole("ADMIN"), async (req, res
   try {
     const status = req.query.status ? String(req.query.status).toUpperCase() : "ALL";
     const q = req.query.q ? String(req.query.q).trim() : "";
+    await ensureAllTeacherApplications();
     const applications = listTeacherApplications({ status, search: q });
     res.json({ success: true, applications });
   } catch (error) {
@@ -2601,6 +2642,7 @@ app.get("/api/admin/teacher-applications", requireRole("ADMIN"), async (req, res
 app.get("/api/admin/teacher-applications/:id", requireRole("ADMIN"), async (req, res) => {
   try {
     const id = req.params.id;
+    await ensureAllTeacherApplications();
     let app = getApplicationByUserId(id);
     if (!app) {
       const all = listTeacherApplications({ status: "ALL" });
@@ -2619,6 +2661,7 @@ app.get("/api/admin/teacher-applications/:id", requireRole("ADMIN"), async (req,
 app.post("/api/admin/teacher-applications/:id/decision", requireRole("ADMIN"), async (req, res) => {
   try {
     const id = req.params.id;
+    await ensureAllTeacherApplications();
     let targetUserId = id;
     let targetApp = getApplicationByUserId(id);
     if (!targetApp) {
@@ -2647,20 +2690,40 @@ app.post("/api/admin/teacher-applications/:id/decision", requireRole("ADMIN"), a
     if (!adminUser && isEnvAdminId(req.userId)) adminUser = getEnvAdminPublicUser();
     if (!adminUser) adminUser = inMemoryUsers.get(req.userId) || { id: req.userId, name: "Platform Admin" };
 
-    const updatedApp = reviewTeacherApplication(adminUser, targetUserId, { status, reason });
-
     const isApproved = status === "APPROVED";
+
+    // Save the decision permanently BEFORE applying it, so an approval can never
+    // exist only in memory and silently disappear on the next restart.
     if (process.env.MONGODB_URI) {
       try {
         await prisma.user.update({
           where: { id: targetUserId },
-          data: { isVerified: isApproved },
+          data: {
+            isVerified: isApproved,
+            teacherStatus: status,
+            teacherRejectionReason: isApproved ? null : String(reason).trim(),
+          },
         });
-      } catch {}
+      } catch (dbErr) {
+        // P2025 = the teacher exists only in memory (no database record to update).
+        if (!dbErr || dbErr.code !== "P2025") {
+          console.error("Teacher decision could not be saved:", dbErr);
+          return res.status(500).json({
+            success: false,
+            message:
+              "The decision could not be saved to the database, so it was not applied. In the backend folder run `npx prisma generate` and `npx prisma db push`, restart the backend, then try again.",
+          });
+        }
+      }
     }
+
+    const updatedApp = reviewTeacherApplication(adminUser, targetUserId, { status, reason });
+
     const memUser = inMemoryUsers.get(targetUserId);
     if (memUser) {
       memUser.isVerified = isApproved;
+      memUser.teacherStatus = status;
+      memUser.teacherRejectionReason = isApproved ? null : String(reason).trim();
       inMemoryUsers.set(targetUserId, memUser);
     }
 
