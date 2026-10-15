@@ -215,7 +215,7 @@ export function SignupForm({ role }: { role: AuthRole }) {
   return (
     <Card className="w-full">
       <CardHeader>
-        <CardTitle className="text-lg">
+        <CardTitle className="text-xl">
           Create your {config.label.toLowerCase()} account
         </CardTitle>
         <CardDescription>
@@ -229,9 +229,12 @@ export function SignupForm({ role }: { role: AuthRole }) {
           onChange={() => confirmError && setConfirmError(false)}
         >
           {/* Profile Picture Upload & Preview */}
-          <div className="flex flex-col items-center justify-center gap-2 p-3 border rounded-lg bg-muted/20">
+          <div className="flex flex-col items-center justify-center gap-2 p-3.5 border border-dashed rounded-lg bg-muted/20">
             <div className="relative group">
-              <Avatar className="size-20 ring-2 ring-primary/20 shadow-sm">
+              <Avatar
+                className="ring-2 ring-primary/20 shadow-sm"
+                style={{ width: "5rem", height: "5rem" }}
+              >
                 {avatarPreview ? (
                   <AvatarImage src={avatarPreview} alt="Preview" className="object-cover" />
                 ) : null}
@@ -296,6 +299,7 @@ export function SignupForm({ role }: { role: AuthRole }) {
             )}
           </div>
 
+          <div className="grid gap-3.5 sm:grid-cols-2 sm:[&>label:last-child:nth-child(odd)]:col-span-2">
           {fields.map((field) => {
             const common = {
               required: true,
@@ -362,6 +366,7 @@ export function SignupForm({ role }: { role: AuthRole }) {
               </label>
             );
           })}
+          </div>
 
           {error ? (
             <p className="text-sm font-normal text-destructive">{error}</p>

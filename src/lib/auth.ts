@@ -131,12 +131,6 @@ export const SIGNUP_FIELDS: Record<AuthRole, SignupField[]> = {
     MOBILE_FIELD,
     PASSWORD_FIELD,
     CONFIRM_FIELD,
-    {
-      name: "connectionCode",
-      label: "Student connection code",
-      type: "text",
-      placeholder: "Enter student connection code",
-    },
   ],
   teacher: [
     {

@@ -12,6 +12,12 @@ const { PrismaClient } = require("@prisma/client");
 const { getStorageAdapter } = require("./storage/storage-adapter");
 const { isEmailConfigured, sendOtpEmail } = require("./services/email-service");
 const {
+  isEnvAdminId,
+  isEnvAdminEmail,
+  getEnvAdminPublicUser,
+  attemptEnvAdminLogin,
+} = require("./services/env-admin");
+const {
   validateAvatarFile,
   MAX_AVATAR_SIZE_BYTES,
 } = require("./services/avatar-validator");
@@ -111,25 +117,6 @@ const defaultDemoUsers = [
 ];
 for (const u of defaultDemoUsers) {
   inMemoryUsers.set(u.id, u);
-}
-
-// Admin account defined ONLY in env (never stored in the database).
-// Set ADMIN_EMAIL and ADMIN_PASSWORD (min 8 chars) to enable login at /auth/admin/login.
-// If either is missing, no admin is created.
-if (process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD) {
-  inMemoryUsers.set("env-admin", {
-    id: "env-admin",
-    name: process.env.ADMIN_NAME || "LUCOUS Admin",
-    email: process.env.ADMIN_EMAIL.trim().toLowerCase(),
-    password: bcrypt.hashSync(process.env.ADMIN_PASSWORD, 10),
-    role: "ADMIN",
-    avatarUrl: null,
-    xp: 0,
-    isVerified: true,
-  });
-  console.log(`[admin] Env admin enabled: ${process.env.ADMIN_EMAIL.trim().toLowerCase()}`);
-} else if (process.env.ADMIN_EMAIL || process.env.ADMIN_PASSWORD) {
-  console.warn("[admin] ADMIN_EMAIL and ADMIN_PASSWORD must BOTH be set in .env. Env admin NOT enabled.");
 }
 
 const app = express();
@@ -278,6 +265,12 @@ app.post("/api/auth/upload-avatar", (req, res) => {
 
 // 2. Authenticated avatar upload (updates authenticated user profile directly)
 app.post("/api/auth/profile/avatar", authenticate, (req, res) => {
+  if (isEnvAdminId(req.userId)) {
+    return res.status(400).json({
+      success: false,
+      message: "The admin account is managed in the server .env file and cannot be edited here.",
+    });
+  }
   avatarUpload.single("avatar")(req, res, async (err) => {
     if (err) {
       if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
@@ -396,6 +389,14 @@ async function registerUser(req, res, forcedRole) {
       return res.status(400).json({
         success: false,
         message: "Name, email, password and role are required",
+      });
+    }
+
+    // The admin account lives in .env; nobody can register with that email.
+    if (isEnvAdminEmail(email)) {
+      return res.status(409).json({
+        success: false,
+        message: "This email is reserved. Please use a different email.",
       });
     }
 
@@ -537,6 +538,17 @@ app.post("/api/auth/login", async (req, res) => {
       });
     }
 
+    // Admin defined in the .env file (not stored in the database).
+    const envAdminResult = await attemptEnvAdminLogin({
+      email,
+      password,
+      ip: req.ip,
+      signToken: (payload) => jwt.sign(payload, JWT_SECRET, { expiresIn: "7d" }),
+    });
+    if (envAdminResult) {
+      return res.status(envAdminResult.status).json(envAdminResult.body);
+    }
+
     let user = null;
     if (process.env.MONGODB_URI) {
       try {
@@ -629,6 +641,14 @@ app.post("/api/auth/login", async (req, res) => {
 // Current authenticated user
 app.get("/api/auth/me", authenticate, async (req, res) => {
   try {
+    if (isEnvAdminId(req.userId)) {
+      const envAdmin = getEnvAdminPublicUser();
+      if (!envAdmin) {
+        return res.status(401).json({ success: false, message: "Admin account is no longer configured" });
+      }
+      return res.json({ success: true, user: envAdmin });
+    }
+
     let user = null;
     if (process.env.MONGODB_URI) {
       try {
@@ -678,6 +698,12 @@ app.get("/api/auth/me", authenticate, async (req, res) => {
 // Never allow updating role, password, or another user's profile.
 app.patch("/api/auth/profile", authenticate, async (req, res) => {
   try {
+    if (isEnvAdminId(req.userId)) {
+      return res.status(400).json({
+        success: false,
+        message: "The admin account is managed in the server .env file and cannot be edited here.",
+      });
+    }
     const allowed = ["name", "phone", "grade", "board", "school", "subject", "avatarUrl"];
     const data = {};
     for (const key of allowed) {
@@ -2618,6 +2644,7 @@ app.post("/api/admin/teacher-applications/:id/decision", requireRole("ADMIN"), a
         adminUser = await prisma.user.findUnique({ where: { id: req.userId } });
       } catch {}
     }
+    if (!adminUser && isEnvAdminId(req.userId)) adminUser = getEnvAdminPublicUser();
     if (!adminUser) adminUser = inMemoryUsers.get(req.userId) || { id: req.userId, name: "Platform Admin" };
 
     const updatedApp = reviewTeacherApplication(adminUser, targetUserId, { status, reason });
@@ -2651,23 +2678,65 @@ app.post("/api/admin/teacher-applications/:id/decision", requireRole("ADMIN"), a
 // ------------------------------- Parent -----------------------------------
 // A parent may only view data for students explicitly linked to them.
 
+// Brute-force protection for the student-password check: 5 wrong tries / 15 min per parent.
+const parentLinkFailures = new Map();
+function parentLinkBlocked(parentId) {
+  const rec = parentLinkFailures.get(parentId);
+  if (!rec) return false;
+  if (Date.now() > rec.resetAt) {
+    parentLinkFailures.delete(parentId);
+    return false;
+  }
+  return rec.count >= 5;
+}
+function parentLinkFailed(parentId) {
+  const now = Date.now();
+  const rec = parentLinkFailures.get(parentId);
+  if (!rec || now > rec.resetAt) {
+    parentLinkFailures.set(parentId, { count: 1, resetAt: now + 15 * 60 * 1000 });
+  } else {
+    rec.count += 1;
+  }
+}
+
 app.post("/api/parent/link", requireRole("PARENT"), async (req, res) => {
   try {
     const rawEmail = req.body.studentEmail;
+    const studentPassword = req.body.studentPassword;
     if (!rawEmail || typeof rawEmail !== "string") {
       return res.status(400).json({ success: false, message: "studentEmail is required" });
     }
+    if (!studentPassword || typeof studentPassword !== "string") {
+      return res.status(400).json({
+        success: false,
+        message: "Enter your child's account password to verify the account.",
+      });
+    }
+    if (parentLinkBlocked(req.userId)) {
+      return res.status(429).json({
+        success: false,
+        message: "Too many incorrect attempts. Please wait 15 minutes and try again.",
+      });
+    }
     const studentEmail = rawEmail.trim().toLowerCase();
 
-    // Security: Avoid revealing whether an arbitrary email belongs to an account
+    // The parent can only link (and then view performance) after proving they know the
+    // student's account password. The same message is used for every failure so nobody
+    // can learn whether an email belongs to a student account.
     const student = await prisma.user.findUnique({ where: { email: studentEmail } });
-    if (!student || student.role !== "STUDENT") {
-      return res.json({
-        success: true,
-        message: "If an active student account exists for this email, it has been linked.",
+    const verified =
+      student &&
+      student.role === "STUDENT" &&
+      (await bcrypt.compare(studentPassword, student.password));
+    if (!verified) {
+      parentLinkFailed(req.userId);
+      return res.status(401).json({
+        success: false,
+        message: "Student email or password is incorrect. Please check and try again.",
       });
     }
 
+    parentLinkFailures.delete(req.userId);
     await prisma.parentChild.upsert({
       where: { parentId_studentId: { parentId: req.userId, studentId: student.id } },
       update: {},
@@ -2675,7 +2744,7 @@ app.post("/api/parent/link", requireRole("PARENT"), async (req, res) => {
     });
     res.json({
       success: true,
-      message: "If an active student account exists for this email, it has been linked.",
+      message: "Student account verified and linked.",
     });
   } catch (error) {
     console.error("Parent link error:", error);

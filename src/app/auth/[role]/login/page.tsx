@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { AuthLayout } from "@/components/auth/auth-layout";
+import { AuthSplitLayout } from "@/components/auth/auth-split-layout";
 import { LoginForm } from "@/components/auth/login-form";
 import { AUTH_ROLES, ROLE_CONFIG, isAuthRole } from "@/lib/auth";
 
@@ -32,8 +32,8 @@ export default async function LoginPage({
   if (!isAuthRole(role)) notFound();
 
   return (
-    <AuthLayout>
+    <AuthSplitLayout>
       <LoginForm role={role} />
-    </AuthLayout>
+    </AuthSplitLayout>
   );
 }

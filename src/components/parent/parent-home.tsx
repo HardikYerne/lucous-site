@@ -92,6 +92,7 @@ function ChildrenPanel() {
   const [error, setError] = React.useState("");
   const [info, setInfo] = React.useState("");
   const [email, setEmail] = React.useState("");
+  const [studentPassword, setStudentPassword] = React.useState("");
   const [linking, setLinking] = React.useState(false);
   const [selected, setSelected] = React.useState<string | null>(null);
 
@@ -124,9 +125,10 @@ function ChildrenPanel() {
     try {
       const res = await apiFetch<{ success: boolean; message?: string }>("/parent/link", {
         method: "POST",
-        body: { studentEmail: email.trim().toLowerCase() },
+        body: { studentEmail: email.trim().toLowerCase(), studentPassword },
       });
       setEmail("");
+      setStudentPassword("");
       setInfo(res.message || "If an active student account exists for this email, it has been linked.");
       await load();
     } catch (err) {
@@ -142,25 +144,40 @@ function ChildrenPanel() {
         <CardHeader>
           <CardTitle>Link a child</CardTitle>
           <CardDescription>
-            Enter your child&apos;s registered student email to connect their learning progress.
+            Enter your child&apos;s student email and their account password. You can view their performance only after the account is verified with that password.
           </CardDescription>
         </CardHeader>
         <CardContent>
           <form className="flex flex-col gap-3 sm:flex-row sm:items-end" onSubmit={link}>
-            <label className="grid flex-1 gap-1.5 text-sm font-medium">
-              Student email
-              <Input
-                required
-                type="email"
-                className="h-10"
-                value={email}
-                disabled={linking}
-                placeholder="child@example.com"
-                onChange={(e) => setEmail(e.target.value)}
-              />
-            </label>
+            <div className="grid flex-1 gap-3">
+              <label className="grid gap-1.5 text-sm font-medium">
+                Student email
+                <Input
+                  required
+                  type="email"
+                  className="h-10"
+                  value={email}
+                  disabled={linking}
+                  placeholder="child@example.com"
+                  onChange={(e) => setEmail(e.target.value)}
+                />
+              </label>
+              <label className="grid gap-1.5 text-sm font-medium">
+                Student password
+                <Input
+                  required
+                  type="password"
+                  className="h-10"
+                  autoComplete="off"
+                  value={studentPassword}
+                  disabled={linking}
+                  placeholder="Enter your child's account password"
+                  onChange={(e) => setStudentPassword(e.target.value)}
+                />
+              </label>
+            </div>
             <Button type="submit" disabled={linking}>
-              {linking ? "Linking…" : "Link child"}
+              {linking ? "Verifying…" : "Verify & link child"}
             </Button>
           </form>
           {error ? (

@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { AuthLayout } from "@/components/auth/auth-layout";
+import { AuthSplitLayout } from "@/components/auth/auth-split-layout";
 import { SignupForm } from "@/components/auth/signup-form";
 import { AUTH_ROLES, ROLE_CONFIG, isAuthRole } from "@/lib/auth";
 
@@ -35,8 +35,8 @@ export default async function SignupPage({
   if (!isAuthRole(role) || !ROLE_CONFIG[role].allowsSignup) notFound();
 
   return (
-    <AuthLayout>
+    <AuthSplitLayout contentClassName="max-w-3xl">
       <SignupForm role={role} />
-    </AuthLayout>
+    </AuthSplitLayout>
   );
 }
