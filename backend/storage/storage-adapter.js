@@ -179,7 +179,7 @@ class LocalStorageAdapter extends StorageAdapter {
  * Compatible with AWS S3, Cloudflare R2, MinIO, or Google Cloud Storage XML API.
  * If credentials are not supplied, provides honest status and guidance.
  */
-class S3StorageAdapter extends StorageAdapter {
+class VercelBlobStorageAdapter extends StorageAdapter {
   constructor(options = {}) {
     super();
     this.bucket = options.bucket || process.env.S3_BUCKET || process.env.AWS_S3_BUCKET;
@@ -228,32 +228,51 @@ class S3StorageAdapter extends StorageAdapter {
  */
 let cachedAdapter = null;
 
+
 function getStorageAdapter(forceNew = false) {
   if (cachedAdapter && !forceNew) {
     return cachedAdapter;
   }
 
-  const driver = (process.env.STORAGE_DRIVER || "local").toLowerCase().trim();
+  const driver = (
+    process.env.STORAGE_DRIVER || "local"
+  ).toLowerCase().trim();
 
-  if (driver === "s3") {
-    const s3Adapter = new S3StorageAdapter();
-    if (s3Adapter.isConfigured()) {
-      cachedAdapter = s3Adapter;
-      return cachedAdapter;
-    } else {
-      console.warn(
-        "[LUCOUS Storage] STORAGE_DRIVER=s3 specified, but S3 credentials missing. Falling back to LocalStorageAdapter for safety."
+  if (driver === "vercel-blob") {
+    const adapter = new VercelBlobStorageAdapter();
+
+    if (!adapter.isConfigured()) {
+      throw new Error(
+        "STORAGE_DRIVER=vercel-blob requires BLOB_READ_WRITE_TOKEN."
       );
     }
+
+    cachedAdapter = adapter;
+    return cachedAdapter;
+  }
+
+  if (driver === "s3") {
+    const adapter = new S3StorageAdapter();
+
+    if (!adapter.isConfigured()) {
+      throw new Error(
+        "STORAGE_DRIVER=s3 requires configured S3 credentials."
+      );
+    }
+
+    cachedAdapter = adapter;
+    return cachedAdapter;
   }
 
   cachedAdapter = new LocalStorageAdapter();
   return cachedAdapter;
 }
 
+
 module.exports = {
   StorageAdapter,
   LocalStorageAdapter,
   S3StorageAdapter,
+  VercelBlobStorageAdapter,
   getStorageAdapter,
 };

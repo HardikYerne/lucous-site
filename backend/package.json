@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "test": "node test-ai-tutor.js",
-    "postinstall": "prisma skills sync || exit 0"
+    "postinstall": "prisma generate",
+    "vercel-build": "prisma generate"
   },
   "keywords": [],
   "author": "",
@@ -13,6 +14,7 @@
   "type": "commonjs",
   "dependencies": {
     "@prisma/client": "^6.19.3",
+    "@vercel/blob": "^2.8.2",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
     "dotenv": "^18.0.3",

@@ -129,7 +129,10 @@ const JWT_SECRET = process.env.JWT_SECRET || "lucous-development-secret";
 const allowedOrigins = [
   "http://localhost:3000",
   "http://127.0.0.1:3000",
-  ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : []),
+  "https://lucous-site.vercel.app",
+  ...(process.env.FRONTEND_URL
+    ? [process.env.FRONTEND_URL.replace(/\/$/, "")]
+    : []),
 ];
 
 // Allow the LUCOUS Next.js frontend to communicate with the backend
@@ -3187,7 +3190,7 @@ function getAiConfig() {
     return {
       provider: "gemini",
       apiKey: geminiKey || genericKey,
-      model: process.env.AI_MODEL || "gemini-2.5-flash",
+      model: process.env.AI_MODEL || "gemini-3.6-flash",
     };
   }
 
@@ -3204,7 +3207,7 @@ function getAiConfig() {
     return {
       provider: "gemini",
       apiKey: geminiKey,
-      model: process.env.AI_MODEL || "gemini-2.5-flash",
+      model: process.env.AI_MODEL || "gemini-3.6-flash",
     };
   }
 
@@ -3222,7 +3225,7 @@ function getAiConfig() {
       return {
         provider: "gemini",
         apiKey: genericKey,
-        model: process.env.AI_MODEL || "gemini-2.5-flash",
+        model: process.env.AI_MODEL || "gemini-6.3-flash",
       };
     }
     return {
@@ -3238,6 +3241,33 @@ function getAiConfig() {
 function aiConfigured() {
   const cfg = getAiConfig();
   return Boolean(cfg.apiKey);
+}
+
+async function fetchWithRetry(url, options, maxRetries = 3) {
+  const retryableStatuses = new Set([408, 429, 500, 502, 503, 504]);
+
+  for (let attempt = 0; ; attempt++) {
+    const response = await fetch(url, options);
+
+    if (
+      response.ok ||
+      !retryableStatuses.has(response.status) ||
+      attempt >= maxRetries
+    ) {
+      return response;
+    }
+
+    await response.body?.cancel();
+
+    const delayMs =
+      Math.min(1000 * 2 ** attempt, 8000) + Math.random() * 500;
+
+    console.warn(
+  `Gemini HTTP ${response.status}. Retry ${attempt + 1}/${maxRetries} after ${Math.round(delayMs)} ms`
+);
+
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
 }
 
 async function callGemini(apiKey, model, messages, { json = false, timeoutMs = 30000 } = {}) {
@@ -3285,7 +3315,7 @@ async function callGemini(apiKey, model, messages, { json = false, timeoutMs = 3
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const resp = await fetch(url, {
+    const resp = await fetchWithRetry(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),

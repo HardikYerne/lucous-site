@@ -29,7 +29,7 @@ function getAiConfig() {
     return {
       provider: "gemini",
       apiKey: geminiKey || genericKey,
-      model: process.env.AI_MODEL || "gemini-2.5-flash",
+      model: process.env.AI_MODEL || "gemini-3.6-flash",
     };
   }
 
@@ -46,7 +46,7 @@ function getAiConfig() {
     return {
       provider: "gemini",
       apiKey: geminiKey,
-      model: process.env.AI_MODEL || "gemini-2.5-flash",
+      model: process.env.AI_MODEL || "gemini-3.6-flash",
     };
   }
 
@@ -63,7 +63,7 @@ function getAiConfig() {
       return {
         provider: "gemini",
         apiKey: genericKey,
-        model: process.env.AI_MODEL || "gemini-2.5-flash",
+        model: process.env.AI_MODEL || "gemini-3.6-flash",
       };
     }
     return {
