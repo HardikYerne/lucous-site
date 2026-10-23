@@ -226,8 +226,8 @@ class VercelBlobStorageAdapter extends StorageAdapter {
 /**
  * Factory to get active storage adapter
  */
-let cachedAdapter = null;
 
+let cachedAdapter = null;
 
 function getStorageAdapter(forceNew = false) {
   if (cachedAdapter && !forceNew) {
@@ -252,16 +252,9 @@ function getStorageAdapter(forceNew = false) {
   }
 
   if (driver === "s3") {
-    const adapter = new S3StorageAdapter();
-
-    if (!adapter.isConfigured()) {
-      throw new Error(
-        "STORAGE_DRIVER=s3 requires configured S3 credentials."
-      );
-    }
-
-    cachedAdapter = adapter;
-    return cachedAdapter;
+    throw new Error(
+      "STORAGE_DRIVER=s3 is not implemented. Use STORAGE_DRIVER=vercel-blob."
+    );
   }
 
   cachedAdapter = new LocalStorageAdapter();
@@ -272,7 +265,6 @@ function getStorageAdapter(forceNew = false) {
 module.exports = {
   StorageAdapter,
   LocalStorageAdapter,
-  S3StorageAdapter,
   VercelBlobStorageAdapter,
   getStorageAdapter,
 };
